@@ -1,0 +1,559 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+    "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+  	<meta http-equiv="Content-Type" content="text/html;charset=UTF-8" />
+	<title>Tool for analyzing modified aminoacids</title>
+	<link href="http://netdna.bootstrapcdn.com/twitter-bootstrap/2.0.4/css/bootstrap-combined.min.css" rel="stylesheet">
+	<script src="http://ajax.googleapis.com/ajax/libs/mootools/1.4.5/mootools-yui-compressed.js"></script>
+	<style type="text/css">
+		html { margin: 20px; }
+		#input { width: 100%; height: 800px; }
+		.table thead tr th { background: #f3f3f3; }
+		.table tbody tr td, .table thead tr th { text-align: center; }
+		table.table tr td.positive, .table tfoot td .positive { background: #a0f06c; }
+		table.table tr td.negative, .table tfoot td .negative { background: #ff5959; }
+		table.table tr td.hydrophobe, .table tfoot td .hydrophobe { background: #f677bf; }
+		table.table tr td.hydrophile, .table tfoot td .hydrophile { background: #5ccccc; }
+		.table .score { padding: 0; }
+		.table .bar { background-color: #eee; border-bottom: 1px solid white; font-size: 10px; cursor: pointer; overflow: hidden; text-align: center; }
+		.table .bar .char { font-weight: bold; }
+		select.criterum, select.boolean, select.position { margin: 4px;} 
+		select.criterum { width: 150px; }
+		select.boolean { width: 130px; }
+		select.position { width: 70px; }
+		.stats-header { text-align: center; font-weight: bold; }
+		.btn { margin-left: 5px; }
+	</style>
+	<script type="text/javascript">
+		(function () {
+			var Controller = new Class( {
+				Implements: [Options, Events],
+				options: {
+					input: "#input",
+					output: "#output"
+				},
+
+				filters: [], // These are filtergroups
+				columns: {prefix: 0, suffix: 0},
+				sequences: [],
+
+				initialize: function ( options )
+				{
+					this.setOptions( options );
+					this.filters.push( new FilterGroup() );
+					this.options.input = document.getElement( this.options.input );
+					this.options.output = document.getElement( this.options.output );
+
+					this.options.input.addEvent( "change", this.parse.bind( this ) );
+					if ( this.options.input.get( "value" ) ) this.parse();
+
+					// Filters trigger redraw events after changes.
+					document.addEvent( 'redraw', this.render.bind( this ) );
+				},
+
+				parse: function ()
+				{
+					this.sequences = [];
+					this.columns = {prefix: 0, suffix: 0};
+					var raw = this.options.input.get( "value" );
+					raw.split( "\n" ).each( function ( line ) {
+						if ( !line.contains( '#' ) ) return;
+ 						var sequence = new Sequence( { rawData: line } )
+						this.columns.prefix = Math.max( this.columns.prefix, sequence.prefix().length );
+						this.columns.suffix = Math.max( this.columns.suffix, sequence.suffix().length );
+						this.sequences.push( sequence );
+					}.bind( this ) );
+					this.render();
+				},
+
+				render: function ()
+				{
+					var columns = 1 + this.columns.prefix + this.columns.suffix;
+
+					this.options.output.empty();
+					if ( this.sequences.length === 0 ) {
+						new Element( "div", {"class":"alert alert-error", "text":"Nothing to render... Feed me data! :)"} ).inject( this.options.output );
+						return;
+					}
+
+					if ( this.filters.length > 0 ) {
+						this.filters.each( function ( filter, key ) {
+							var representation = filter.render();
+							if ( key > 0 ) {
+								new Element( "button", {"class":"btn btn-danger", "text":"Remove filter group", "events":{ "click": function () {
+									this.filters.erase( filter );
+									this.render();
+								}.bind( this ) } } ).inject( representation.getElement('.button-well') );
+							}
+
+							representation.inject( this.options.output )
+						}.bind( this ) );
+						var button_well = new Element("div", {"class":"well"}).inject( this.options.output );
+						new Element( "button", {"class":"btn btn-primary","text":"Add filter group", "events":{ "click": function () {
+							this.filters.push( new FilterGroup() );
+							this.render();
+						}.bind( this ) } } ).inject( button_well );
+					}
+
+					var table = new Element( "table", {"class":"table table-bordered"} ).inject( this.options.output );
+					var tbody;
+					var rendered_rows = 0;
+
+					var stats = [];
+
+					// render table body
+					this.sequences.each( function ( sequence, key ) {
+						
+						var pass = true;
+						this.filters.each( function ( filter ) {
+							if ( !pass ) return;
+							pass = filter.match( sequence );
+						} );
+						if ( !pass ) return;
+
+						if ( rendered_rows == 0 || rendered_rows % 15 == 0 ) {
+							var thead = new Element( "thead" ).inject( table );
+							var thead_tr = new Element( "tr" ).inject( thead );
+							// render thead
+							for ( var i = 1 ; i < columns ; i++ ) {
+								new Element( "th", {"text": 0-this.columns.prefix+i} ).inject( thead_tr );
+							}
+							tbody = new Element( "tbody" ).inject( table );
+						}
+						rendered_rows++;
+
+						// Render table rows
+						var tr = new Element( "tr" ).inject( tbody );
+						var pos, c, td;
+						for ( var i = 1 ; i < columns ; i++ ) {
+							pos = 0-this.columns.prefix+i;
+							c = sequence.getCharacter( pos );
+							td = new Element( "td", {"html": c ? c : '&nbsp;' } ).inject( tr );
+							td.store( "position", pos );
+							td.store( "character", c );
+
+							// Keep stats for later
+							if ( c ) {
+								var stat_char = c.toUpperCase();
+								if ( !stats[i] ) stats[i] = {};
+								if ( !stats[i][stat_char] ) stats[i][stat_char] = 0;
+								stats[i][stat_char]++;
+							}
+							
+							if ( c ) {
+								td.setStyle( 'cursor', "pointer" );
+								var type = "";
+								if ( sequence.isHydrophobe( pos ) ) {
+									td.addClass( "hydrophobe" );
+									type = "Hydrophobe";
+								} else if ( sequence.isHydrophile( pos ) ) {
+									td.addClass( "hydrophile" );
+									type = "Hydrophile";
+								} else if ( sequence.isPositive( pos ) ) {
+									td.addClass( "positive" );
+									type = "Positive";
+								} else if ( sequence.isNegative( pos ) ) {
+									td.addClass( "negative" );
+									type = "Negative";
+								}
+								td.store( "type", type );
+								td.set( "title", c + " [" + pos + "] " + type );
+
+								td.addEvent( 'click', function ( event, td ) {
+									event = new Event( event );
+									var filterGroup = this.filters.getLast();
+									if ( !event.event.altKey ) {
+										filterGroup.add( new Filter( { "position": td.retrieve("position"), "character": td.retrieve("character"), pass_result: !event.event.shiftKey } ) );
+									} else {
+										filterGroup.add( new Filter( { "position": td.retrieve("position"), "type": td.retrieve("type"), pass_result: !event.event.shiftKey } ) );
+									}
+									this.render();
+								}.bindWithEvent( this, td ) );
+							}
+						}
+					}.bind( this ) );
+
+					// Render stats
+					var tfoot = new Element( "tfoot" ).inject( table );
+					new Element( "td", {"colspan": columns, "text": "Statistics", "class":"stats-header"} ).inject( new Element( "tr" ).inject( tfoot ) );
+					var stats_tr = new Element( "tr" ).inject( tfoot );
+					for ( var i = 1 ; i < columns ; i++ ) {
+						pos = 0-this.columns.prefix+i;
+						var score_td = new Element( "td",{"class":"score"} ).inject( stats_tr );
+						"GAVLIMFWPSTCYNQDEKRH".split("").concat(["#S", "#T"]).each( function ( c ) {
+							var hits = stats[i] && stats[i][c] ? stats[i][c] : 0;
+							if ( hits == 0 ) return;
+							var score = hits / rendered_rows;
+							var bar = new Element( "div", {"class":"bar", "styles":{"height":Math.max( 18, Math.round(score*600)-1)}, "title": c + " has " + hits + " occurences on position " + pos } ).inject( score_td );
+							new Element( "span", {"class":"char", "text":c} ).inject( bar );
+							new Element( "span", {"class":"hits", "text": " (" + hits + ")"} ).inject( bar );
+
+							var type = "";
+							if ( "GAVLIMFWP".contains( c ) ) {
+								bar.addClass( "hydrophobe" );
+								type = "Hydrophobe";
+							} else if ( "STCYNQ".contains( c ) ) {
+								bar.addClass( "hydrophile" );
+								type = "Hydrophile";
+							} else if ( "KRH".contains( c ) ) {
+								bar.addClass( "positive" );
+								type = "Positive";
+							} else if ( "DE".contains( c ) ) {
+								bar.addClass( "negative" );
+								type = "Negative";
+							}
+
+							bar.store( "type", type );
+							bar.store( "position", pos );
+							bar.store( "character", c );
+							bar.addEvent( 'click', function ( event, bar ) {
+								event = new Event( event );
+								var filterGroup = this.filters.getLast();
+								if ( !event.event.altKey ) {
+									filterGroup.add( new Filter( { "position": bar.retrieve("position"), "character": bar.retrieve("character"), pass_result: !event.event.shiftKey } ) );
+								} else {
+									filterGroup.add( new Filter( { "position": bar.retrieve("position"), "type": bar.retrieve("type"), pass_result: !event.event.shiftKey } ) );
+								}
+								this.render();
+							}.bindWithEvent( this, bar ) );	
+						}.bind( this ) );
+					}
+				}
+			} );
+
+			var FilterGroup = new Class( {
+				
+				filters: [],
+				container: null,
+
+				initialize: function ()
+				{
+
+				},
+
+				add: function ( filter )
+				{
+					filter.filter_group = this;
+					this.filters.push( filter );
+				},
+
+				match: function ( sequence )
+				{
+					var pass = true;
+					this.filters.each( function ( filter ) {
+						pass = pass & filter.match( sequence );
+					} );
+					return pass;
+				},
+
+				render: function ()
+				{
+					//if ( this.filters.length === 0 ) return new Element( "div" );
+					if ( this.container ) {
+						this.container.empty();
+					} else {
+						this.container = new Element( "div", {"class":"well"} );
+					}
+					this.filters.each( function ( filter ) {
+						var filter_view = filter.render();
+						new Element("button", {"class":"btn", "text":"Remove this filter", "events": { "click": function () {
+							this.filters.erase( filter );
+							document.fireEvent( "redraw" );
+						}.bind( this ) } } ).inject( filter_view );
+						filter_view.inject( this.container )
+					}.bind( this ) );
+
+					var well = new Element("div", {"class":"clear button-well"}).inject( this.container );
+					new Element( "button", {"class":"btn", "text":"Add filter", "events":{ "click": function () {
+						this.add( new Filter() );
+						this.render();
+					}.bind( this ) } } ).inject( well );
+
+					if ( this.filters.length > 0 ) {
+						new Element( "button", {"class":"btn btn-warning", "text":"Invert filters", "events":{ "click": function () {
+							this.filters.each( function ( f ) { f.options.pass_result = !f.options.pass_result } );
+							document.fireEvent( "redraw" );
+						}.bind( this ) } } ).inject( well );
+					}
+
+					return this.container;
+				}
+			} );
+
+			var Filter = new Class( {
+				Implements: Options,
+				options: {
+					position: 0,
+					character: '',
+					type: '',
+					pass_result: true
+				},
+
+				filter_group: null,
+
+				initialize: function ( options )
+				{
+					this.setOptions( options );
+				},
+
+				match: function ( sequence ) {
+					var char_match = false;
+					var type_match = false;
+					if ( this.options.character ) {
+						char_match = this.options.character.toUpperCase() == sequence.getCharacter( this.options.position ).toUpperCase();
+					}
+					if ( this.options.type ) {
+						switch ( this.options.type ) {
+							case "Hydrophile": type_match = sequence.isHydrophile( this.options.position ); break;
+							case "Hydrophobe": type_match = sequence.isHydrophobe( this.options.position ); break;
+							case "Positive": type_match = sequence.isPositive( this.options.position ); break;
+							case "Negative": type_match = sequence.isNegative( this.options.position ); break;
+						}
+					}
+					if ( this.options.type && this.options.character ) return this.options.pass_result == type_match && char_match;
+					else if ( this.options.type ) return this.options.pass_result == type_match;
+					if ( this.options.character ) return this.options.pass_result == char_match;
+					return true;
+				},
+
+				render: function ()
+				{
+					var container = new Element( "div", {"class":"alert"} );
+					container.addClass( this.options.pass_result ? 'alert-success' : 'alert-error' );	
+					
+					new Element( "span", {"text":"Position"} ).inject( container );
+
+					col_select = new Element( "select", {"class":"position", "events":{"change": function () {
+						this.options.position = col_select.get( "value" );
+						document.fireEvent( "redraw" );
+					}.bind(this) } } ).inject( container );
+					new Element("option", {"value":"", "text":"Any"}).inject( col_select );
+					[-20, -19, -18, -17, -16, -15, -14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].each( function ( t ) {
+						new Element("option", {"value":t, "text":t, "selected": (t == this.options.position) } ).inject( col_select );
+					}.bind( this ) );
+
+					var match_select = new Element( "select", {"class":"boolean","events":{"change": function () {
+						this.options.pass_result = match_select.get( "value" ) == "true";
+						document.fireEvent( "redraw" );
+					}.bind(this) } } ).inject( container );
+					new Element( "option", {"value": "true","text":"Must match"} ).inject( match_select );
+					new Element( "option", {"value": "false","text":"Must not match", "selected": (this.options.pass_result === false)} ).inject( match_select );
+
+					var crit_select = new Element( "select", {"class":"criterum", "events":{"change": function () {
+						if ( crit_select.get( "value" ).length > 2 ) {
+							this.options.type = crit_select.get( "value" );
+						} else {
+							this.options.character = crit_select.get( "value" );
+						}
+						document.fireEvent( "redraw" );
+					}.bind(this) } } ).inject( container );
+					new Element("option", {"value":"", "text":"Any"}).inject( crit_select );
+					"GAVLIMFWPSTCYNQDEKRH".split("").append(['#S', '#T', "Positive", "Negative", "Hydrophobe", "Hydrophile"]).each( function ( c ) {
+						new Element("option", {"value":c, "text":c, "selected": (c == this.options.character.toUpperCase()) || (c == this.options.type)} ).inject( crit_select );
+					}.bind( this ) );
+
+					return container;
+				}
+			} );
+
+			var Sequence = new Class( {
+				Implements: Options,
+
+				options: {
+					rawData: ""
+				},
+
+				cache: {positions: [], hashmap: {}},
+
+				initialize: function ( options )
+				{
+					this.setOptions( options );
+					this.options.rawData = this.options.rawData.trim();
+				},
+
+				getCharacter: function ( pos )
+				{
+					if ( this.cache.positions[pos] ) return this.cache.positions[pos];
+					var data;
+					if ( pos < 0 ) {
+						data = this.prefix().split("").reverse().join("");;
+					} else if ( pos === 0 ) {
+						return this.cache.positions[pos] = this.options.rawData.match(/(#.)/)[1];
+					} else {
+						data = this.suffix();
+					}
+					if ( data.length < Math.abs( pos ) ) return '';
+					return this.cache.positions[pos] = data.substr( Math.abs( pos )-1, 1 );
+				},
+
+				isHydrophobe: function ( pos )
+				{
+					var c = this.getCharacter( pos ).toUpperCase();
+					return c ? "GAVLIMFWP".contains( c ) : false;
+				},
+
+				isHydrophile: function ( pos )
+				{
+					var c = this.getCharacter( pos ).toUpperCase(); 
+					return c ? "STCYNQ".contains( c ) : false;
+				},
+
+				isNegative: function ( pos )
+				{
+					var c = this.getCharacter( pos ).toUpperCase(); 
+					return c ? "DE".contains( c ) : false;
+				},
+
+				isPositive: function ( pos )
+				{
+					var c = this.getCharacter( pos ).toUpperCase(); 
+					return c ? "KRH".contains( c ) : false;
+				},
+
+				prefix: function ()
+				{
+					if ( this.cache.hashmap.prefix ) return this.cache.hashmap.prefix;
+					return this.cache.hashmap.prefix = this.options.rawData.split(/#./)[0];
+				},
+
+				suffix: function ()
+				{
+					if ( this.cache.hashmap.suffix ) return this.cache.hashmap.suffix;
+					return this.cache.hashmap.suffix = this.options.rawData.split(/#./)[1];
+				}
+			} );
+
+			document.addEvent( 'domready', function ()
+			{
+				var controller = new Controller();
+			} );
+		})();
+	</script>
+</head>
+<body>
+	<div class="alert alert-info">Welcome to TAMA! The Tool for Analyzing Modified Aminoacids. Fill the textarea on the left with enter-separated sequences (i.e: kspRSPQL#SDFGLE) and use the interface on the right to navigate the data. To create a filter based on the aminoacid itself, simply click the corresponding table cell. To create a filter based on the property of the aminoacid, alt-click on the corresponding table cell, hold shift while clicking to invert your selection. Have fun! - <em>Johan Adriaans</em></div>
+	<div class="row-fluid">
+		<div class="span3 inputcontainer">
+			<textarea id="input" placeholder="Paste the protein sequences here">
+iynISGNG#SPLADS
+nrlAQICS#SIRTHK
+kspRSPQL#SDFGLE
+tmgRDPGV#SFKAVG
+qaFELIL#SPPSMD
+wdSEDFG#SPQKSC
+llqDSVDF#SLADAI
+stRPPTL#SPIPHI
+TSSAVWN#SPPLQGAR
+GPREPPQ#SARRkrsykq
+pygrQTAP#SGLSTLPQ
+MAFSILN#TPKklgnsll
+IAGEA#SRLAHYNKR
+IEDVG#SDEEDDSGKDKK
+SLGLSL#SGGDQEDAGR
+riikVNGE#SVIGKtysqvi
+SYRSVGG#SGGGSFGD
+VGGSGGG#SFGDNLVT
+QASSTPL#SPTRItrlq
+VGGSGGG#SFGDNLVT
+hkvKTAQV#SDERKSYS
+RSLSEIH#SPNIQDSS
+REGLVPL#SVSSGKN
+TSSAVWN#SPPLQGAR
+NYGMDLN#SDDSTDDE
+RKSLVMH#TPPVLKKI
+SQPDPVD#TPTSSKPQ
+KAQSLVI#SPPAPSPR
+VISPPAP#SPRKTPVA
+SQPDLVD#TPTSSKPQ
+KVEDAAD#SATKPENL
+QYSQQQN#SPQKHknkd
+micskRR#SGASEANLIVA
+LAGTLPG#SKRQlqtpk
+ksrpKSGG#SGHAVAEP
+HAVAEPA#SPEQELDQ
+ellacRNLMP#SAGKAmhtpk
+kdmKAFMG#TPVQKLDL
+LPGNLPG#SKRWpqtpk
+SVASTPI#SQRRSQGR
+RIKYSVG#SLSPVSAS
+KYSVGSL#SPVSASVL
+GLTLQSV#SPQSLQGK
+KSRESA#SPTIPNLD
+SRESASP#TIPNLDLL
+rRSASSN#SAEAGGDT
+RYSGVNQ#SMLFDKL
+PPFQTNP#SPEMVSKL
+RRRTFSL#TEVRGqvs
+DFHMDFD#SAVAPRA
+RSPSLLQ#SGAKKka
+gkaqvKA#TNESEDEIPQL
+GPRPVEG#TPASRT
+STIAILN#SVKKAvesk
+LTLLPHG#TPNSASPC
+LPHGTPN#SASPCSQR
+AEDLSGV#SPVVCSKL
+KSGSELP#SILPEIWP
+STRMSTV#SELRItaqe
+lqsKSLHL#SPQEQSAS
+PSALEAD#SPMAPKR
+GQPLFLD#SISPKKS
+PLFLDSI#SPKKSfktrk
+stgRISN#SATYSGSV
+gRISNSA#TYSGSVAP
+ISNSATY#SGSVAPAN
+EEEEDQE#TPSRNlrvra
+EEDQETP#SRNlrvradrn
+sveeRDSG#SFVAFQNI
+KDRPSL#TVTPKR
+DRPSLTV#TPKRwklrar
+LQVPSSE#SKAlaits
+epdlRSMV#SPVPSPTG
+SMVSPVP#SPTGTISV
+VSPVPSP#TGTISVPN
+PVPSPTG#TISVPNSC
+VPNSCPA#SPRGagsssy
+klrgqkRSGA#SGASAAPA
+SKPSGND#SCELRN
+ILEGPQQ#SLSGSPLQ
+EGPQQSL#SGSPLQPI
+PQQSLSG#SPLQPIPA
+PLQPIPA#SPPPQIPP
+TTDQSVA#sVRKTTVL
+GPREPPQ#sARRKRSY
+GEENMDI#tKSHTVAI
+VFAKTSA#sLEMNQGV
+LCPNPED#tCDFARAA
+IFDEFLL#sEKKNKSP
+TRMFPHH#sITESVNY
+QRIDEEL#tGKSRKSQ
+DSDRYAC#sPLPSYLE
+EQDDDNNsADGQQED
+SKKTSTPsPQPSKRA
+RPGRTSD#sPWFLSGS
+SSMSSSIT#TPPTAK
+PIGRRHTM#SPVPATSENK
+VVDLEAA#SSHTPVQS
+MNGSHPLQL#SNKsllsihl
+kntlkVAF#SSPNLKgld
+kntlkVAFS#SPNLKgld
+YPFTLSE#SAISSSHK
+LEAASSH#TPVQSSSS
+SVHEYPFTLSESAI#SSSHKssiperr
+qlprnkSSV#SIAEQAASRPK
+KPAAVA#SKESTVDT
+TPSSDSP#SLENSLSNLNDLFK
+kglskfkNSFL#SRKnssqi
+krkmkSAVFG#SRVKlndeea
+sliekPRASS#SPIHHANNN
+SHTPVQSSS#SEDEFK
+QRSSNA#SEEKPSAASE
+DVETLMA#SLDQLGME
+SESGQA#TPVLTPQL
+</textarea>
+		</div>
+		<div class="span9" id="output">
+		</div>
+	</div>
+</body>
+</html>
